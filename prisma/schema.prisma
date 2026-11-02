@@ -1,0 +1,325 @@
+// ReMatX Prisma Database Schema
+// Reusable Construction Materials Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  passwordHash    String
+  name            String
+  phone           String?
+  role            String         @default("BUYER") // BUYER, SELLER, CONTRACTOR, CONSTRUCTION_COMPANY, ARCHITECT, ENGINEER, INSPECTOR, ADMIN
+  companyId       String?
+  company         Company?       @relation(fields: [companyId], references: [id])
+  avatarUrl       String?
+  isVerified      Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  materials       Material[]     @relation("SellerMaterials")
+  listings        Listing[]      @relation("SellerListings")
+  inspections     Inspection[]   @relation("InspectorInspections")
+  offersSent      Offer[]        @relation("BuyerOffers")
+  ordersBought    Order[]        @relation("BuyerOrders")
+  ordersSold      Order[]        @relation("SellerOrders")
+  messagesSent    Message[]      @relation("SentMessages")
+  messagesReceived Message[]     @relation("ReceivedMessages")
+  reviewsGiven    Review[]       @relation("ReviewAuthor")
+  reviewsReceived Review[]       @relation("ReviewTarget")
+  notifications   Notification[]
+  passportsOwned  MaterialPassport[] @relation("PassportCurrentOwner")
+}
+
+model Company {
+  id                String       @id @default(uuid())
+  name              String
+  businessRegNumber String?
+  companyType       String       // DEMOLITION, CONTRACTOR, ARCHITECTURE, ENGINEERING, RECYCLER
+  taxId             String?
+  verifiedStatus    String       @default("PENDING") // PENDING, VERIFIED, REJECTED
+  address           String?
+  contactEmail      String?
+  contactPhone      String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  users             User[]
+}
+
+model MaterialCategory {
+  id                  String     @id @default(uuid())
+  name                String     @unique // Bricks, Concrete Blocks, Structural Steel, Timber, Doors & Windows, Tiles & Ceramics, Roofing, Sanitary Fixtures
+  slug                String     @unique
+  description         String
+  icon                String?
+  carbonFactorKgPerUnit Float    @default(0.85) // Embodied carbon saved per unit reused
+  standardCount       Int        @default(1)
+  createdAt           DateTime   @default(now())
+
+  materials           Material[]
+  standards           Standard[]
+}
+
+model Material {
+  id                  String             @id @default(uuid())
+  materialId          String             @unique // e.g. RM-2026-000145
+  categoryId          String
+  category            MaterialCategory   @relation(fields: [categoryId], references: [id])
+  sellerId            String
+  seller              User               @relation("SellerMaterials", fields: [sellerId], references: [id])
+  name                String
+  description         String
+  
+  // Technical Specifications
+  dimensions          String             // e.g. 225 x 105 x 65 mm
+  lengthMm            Float?
+  widthMm             Float?
+  heightMm            Float?
+  weightKg            Float?
+  quantity            Float              // e.g. 4500
+  unit                String             // units, m2, m3, tonnes, pieces
+  
+  // Origin & Condition
+  originBuilding      String?            // "Commercial Bank HQ, Colombo 03"
+  ageYears            Int?               // e.g. 15
+  previousUse         String?            // "Exterior load-bearing facade"
+  recoveryDate        DateTime?
+  conditionGrade      String             @default("GRADE_B") // GRADE_A, GRADE_B, GRADE_C, GRADE_D, REJECTED
+  conditionNotes      String?
+  storageCondition    String?            // "Indoor dry warehouse", "Covered pallet"
+  
+  // Location
+  locationAddress     String
+  locationCity        String
+  locationPostalCode  String?
+  
+  // Status flow: DRAFT -> SUBMITTED -> UNDER_REVIEW -> VERIFIED -> AVAILABLE -> RESERVED -> SOLD -> DELIVERED -> REUSED (or REJECTED)
+  status              String             @default("DRAFT")
+  
+  // Media & Documents
+  images              String             @default("[]") // JSON Array of URLs
+  documents           String             @default("[]") // JSON Array of { title, url, type }
+  
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  passport            MaterialPassport?
+  inspections         Inspection[]
+  listings            Listing[]
+}
+
+model MaterialPassport {
+  id                    String       @id @default(uuid())
+  materialId            String       @unique
+  material              Material     @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  passportNumber        String       @unique // e.g. RM-2026-000145
+  
+  originSite            String?
+  demolitionContractor  String?
+  manufacturingYear     Int?
+  recoveryDate          DateTime?
+  
+  // Circularity & Carbon Metrics
+  embodiedCarbonSavedKg Float        @default(0.0) // calculated CO2e saved
+  wasteDivertedKg       Float        @default(0.0) // landfill weight saved
+  circularityScore      Float        @default(88.5) // % index
+  
+  // Custody
+  currentOwnerId        String?
+  currentOwner          User?        @relation("PassportCurrentOwner", fields: [currentOwnerId], references: [id])
+  currentLocation       String?
+  
+  // QR & Verification
+  qrCodeDataUrl         String?      // Data URI or SVG of QR code pointing to /passports/[passportNumber]
+  verificationStatus    String       @default("VERIFIED") // PENDING, VERIFIED, EXPIRED
+  verifiedAt            DateTime?
+  verifiedByInspector   String?
+  
+  reuseNotes            String?      // e.g. "Application subject to structural engineer approval"
+  version               Int          @default(1)
+  historyLog            String       @default("[]") // JSON Array of { timestamp, action, actor, location, notes }
+  
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+}
+
+model Standard {
+  id                  String             @id @default(uuid())
+  categoryId          String
+  category            MaterialCategory   @relation(fields: [categoryId], references: [id])
+  code                String             @unique // e.g. SLS-BS-EN-771-1
+  title               String             // Specification for masonry units: Clay masonry units
+  version             String             // 2026.1
+  effectiveDate       DateTime           @default(now())
+  scope               String             // Testing compressive strength, water absorption, durability for reuse
+  organization        String             // "Sri Lanka Standards Institution / ISO / CEN"
+  acceptanceCriteria  String             // JSON Array of criteria specs
+  status              String             @default("ACTIVE") // ACTIVE, SUPERSEDED
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  inspections         Inspection[]
+}
+
+model Inspection {
+  id                  String             @id @default(uuid())
+  materialId          String
+  material            Material           @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  inspectorId         String
+  inspector           User               @relation("InspectorInspections", fields: [inspectorId], references: [id])
+  standardId          String?
+  standard            Standard?          @relation(fields: [standardId], references: [id])
+  
+  inspectionDate      DateTime           @default(now())
+  visualScore         Int                @default(85) // 0-100
+  assignedGrade       String             // GRADE_A, GRADE_B, GRADE_C, GRADE_D, REJECTED
+  result              String             @default("PASSED") // PASSED, PASSED_WITH_CONDITIONS, FAILED
+  remarks             String?
+  disclaimer          String             @default("Platform visual & non-destructive assessment. Structural reuse subject to project engineer validation.")
+  reportUrl           String?
+  
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  tests               InspectionTest[]
+}
+
+model InspectionTest {
+  id                  String       @id @default(uuid())
+  inspectionId        String
+  inspection          Inspection   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  
+  testName            String       // e.g. "Compressive Strength", "Water Absorption", "Moisture Content", "Dimension Tolerance", "Corrosion Loss"
+  method              String?      // e.g. "Rebound Hammer (ASTM C805)", "Ultrasonic Thickness Gauge"
+  unit                String?      // e.g. "N/mm2", "%", "mm"
+  recordedValue       String       // e.g. "18.4"
+  thresholdRequired   String       // e.g. ">= 15.0"
+  status              String       // PASS, CONDITIONAL, FAIL
+  notes               String?
+}
+
+model Listing {
+  id                  String       @id @default(uuid())
+  materialId          String
+  material            Material     @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  sellerId            String
+  seller              User         @relation("SellerListings", fields: [sellerId], references: [id])
+  
+  title               String
+  description         String?
+  pricePerUnit        Float
+  availableQuantity   Float
+  unit                String
+  minOrderQuantity    Float        @default(1)
+  
+  listingType         String       @default("BUY_NOW") // BUY_NOW, REQUEST_QUOTE, ACCEPT_OFFERS
+  status              String       @default("ACTIVE")   // ACTIVE, RESERVED, SOLD, EXPIRED
+  
+  publishedAt         DateTime     @default(now())
+  expiresAt           DateTime?
+  updatedAt           DateTime     @updatedAt
+
+  offers              Offer[]
+  orders              Order[]
+}
+
+model Offer {
+  id                  String       @id @default(uuid())
+  listingId           String
+  listing             Listing      @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  buyerId             String
+  buyer               User         @relation("BuyerOffers", fields: [buyerId], references: [id])
+  
+  offeredPricePerUnit Float
+  requestedQuantity   Float
+  totalOfferAmount    Float
+  notes               String?
+  status              String       @default("PENDING") // PENDING, ACCEPTED, REJECTED, COUNTERED
+  counterPrice        Float?
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  order               Order?
+}
+
+model Order {
+  id                  String       @id @default(uuid())
+  orderNumber         String       @unique // e.g. ORD-2026-00089
+  listingId           String
+  listing             Listing      @relation(fields: [listingId], references: [id])
+  buyerId             String
+  buyer               User         @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId            String
+  seller              User         @relation("SellerOrders", fields: [sellerId], references: [id])
+  offerId             String?      @unique
+  offer               Offer?       @relation(fields: [offerId], references: [id])
+  
+  quantity            Float
+  unit                String
+  unitPrice           Float
+  subtotal            Float
+  taxAmount           Float        @default(0.0)
+  logisticsFee        Float        @default(0.0)
+  totalAmount         Float
+  
+  // Payment Flow: PENDING -> ESCROW_HELD -> RELEASED -> REFUNDED
+  paymentStatus       String       @default("PENDING")
+  paymentMethod       String       @default("ESCROW_BANK_TRANSFER")
+  invoiceNumber       String?
+  
+  // Delivery Flow: PENDING -> PICKUP_SCHEDULED -> IN_TRANSIT -> DELIVERED -> CONFIRMED
+  deliveryStatus      String       @default("PENDING")
+  deliveryAddress     String?
+  carrierName         String?
+  trackingNumber      String?
+  estimatedDelivery   DateTime?
+  
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+}
+
+model Message {
+  id                  String       @id @default(uuid())
+  senderId            String
+  sender              User         @relation("SentMessages", fields: [senderId], references: [id])
+  receiverId          String
+  receiver            User         @relation("ReceivedMessages", fields: [receiverId], references: [id])
+  
+  materialId          String?
+  content             String
+  read                Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+}
+
+model Review {
+  id                  String       @id @default(uuid())
+  authorId            String
+  author              User         @relation("ReviewAuthor", fields: [authorId], references: [id])
+  targetUserId        String
+  targetUser          User         @relation("ReviewTarget", fields: [targetUserId], references: [id])
+  
+  rating              Int          // 1 - 5 stars
+  comment             String
+  createdAt           DateTime     @default(now())
+}
+
+model Notification {
+  id                  String       @id @default(uuid())
+  userId              String
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  title               String
+  message             String
+  link                String?
+  read                Boolean      @default(false)
+  createdAt           DateTime     @default(now())
+}
